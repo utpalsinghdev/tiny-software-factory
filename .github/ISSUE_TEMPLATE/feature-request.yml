@@ -1,0 +1,78 @@
+---
+name: Feature request
+description: Propose an improvement to the tiny software factory.
+title: "[Feature Request] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing open and closed issues first. Explain what you need the
+        factory to do and the result you expect. The factory stays small on
+        purpose, so say why this belongs in the core rather than in your own
+        install.
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Existing requests
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: What would it change?
+      options:
+        - The pipeline (stages, rounds, approval, merging)
+        - An agent (new agent, instructions, model or CLI)
+        - Reviewer routing (risk, surfaces)
+        - Harness support (Claude Code, Pi, Codex, others)
+        - Install and setup
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is hard today?
+      description: >-
+        Who runs into it and where the current factory falls short. Separate
+        what you observed from what you assume.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Requested behaviour
+      description: >-
+        Describe the starting state, what you do (`/factory run`, `/factory
+        #<issue-id>`, `/factory ask`), and what the factory should do. Name the
+        stage, agent or script it touches.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: What would make this complete?
+      description: >-
+        Observable acceptance criteria. Consider job state in `job.json`, the
+        files each agent writes, resuming after a dead session, GitHub labels
+        and comments, and every supported harness. Separate essentials from
+        later ideas.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: >-
+        What have you tried, such as editing an `AGENT.md` or `config.json` in
+        your own install, and why isn't it enough?
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you like to contribute?
+      options:
+        - I am proposing the idea only
+        - I can test it on my own repo
+        - I would like to implement it after scope is agreed

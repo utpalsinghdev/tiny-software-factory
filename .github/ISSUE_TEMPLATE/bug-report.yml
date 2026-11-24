@@ -1,0 +1,98 @@
+---
+name: Bug report
+description: Report a reproducible problem with the tiny software factory.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing open and closed issues first. Use real observations from
+        a factory run. Remove tokens, private repo names, private issue text and
+        anything from `.env` before you paste logs or job files.
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it break?
+      options:
+        - "/factory skill (orchestration: run, #<issue-id>, ask)"
+        - "factory/bin/job (state, moves, queue, merge)"
+        - "factory/bin/agent (launching an agent, CLI, model)"
+        - "An agent's instructions (.agents/agents/<agent>/AGENT.md)"
+        - "factory/config.json (concurrency, rounds, reviewers, ports)"
+        - "Install (INSTALL.md)"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: >-
+        Describe the actual behaviour and where the job ended up. Include the
+        job id and stage from `factory/bin/job summary` if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        Start from a clean install and a small test issue where you can.
+      placeholder: |
+        1. Label a small issue `factory`.
+        2. Run `/factory run` (or `/factory #<issue-id>`).
+        3. Describe where it stopped or what went wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should the factory have done at that step?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Factory commit
+      description: >-
+        The tiny-software-factory commit you installed from. Say unknown if you
+        can't tell.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Harness and CLIs
+      description: >-
+        The harness running `/factory` (Claude Code, Pi or Codex) and its
+        version, plus the output of `claude --version`, `codex --version`, `gh
+        --version` and `python3 --version`, and your OS.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Script output and job files
+      description: >-
+        Paste the refusal or error line from `factory/bin/job` or
+        `factory/bin/agent`, and the first lines of the relevant job files
+        (`intake.md`, `build.md`, a review or `decision.md`). For agent
+        failures, a short excerpt from `factory/jobs/<job-id>/logs/` helps. Keep
+        it sanitized.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: >-
+        Related issues, how often it happens, and any workaround you actually
+        tried.
