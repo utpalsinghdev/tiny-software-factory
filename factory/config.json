@@ -1,0 +1,21 @@
+{
+  "concurrency": 3,
+  "max_rounds": 3,
+  "base_branch": "main",
+  "merge_method": "merge",
+  "labels": {
+    "queue": "factory",
+    "needs_info": "factory:needs-info",
+    "needs_human": "factory:needs-human"
+  },
+  "reviewers": {
+    "always": ["code-review"],
+    "ui": ["ui-ux-review", "ui-design-review"],
+    "security": ["security-review"]
+  },
+  "ports": {
+    "base": 5100,
+    "step": 10,
+    "offsets": { "builder": 0, "ui-ux-review": 1, "ui-design-review": 2 }
+  }
+}

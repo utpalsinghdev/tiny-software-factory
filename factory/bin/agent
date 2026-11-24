@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Run one factory agent on its own CLI and model, whatever harness orchestrates.
+
+Usage:
+  agent <job> <agent> [note]   run one agent for a job; prints its one-line reply
+  agent <job> reviewers        run every routed reviewer still missing a file
+                               in the current round, in parallel
+
+Each agent lives in .agents/agents/<agent>/AGENT.md. Its frontmatter says which
+CLI runs it and how:
+
+  cli: claude | codex
+  model: opus | sonnet | haiku | gpt-6.2-sol | ...
+  effort: low | medium | high
+  tools: Read, Grep, Glob, Write      (claude only; codex runs in its sandbox)
+
+The body of AGENT.md becomes the agent's instructions. The prompt is the job's
+header (built from job.json) plus the optional note, so the orchestrator never
+hand-writes paths. The full transcript goes to <job folder>/logs/.
+
+The builder keeps one Claude session per job: later rounds resume it, so the
+same builder fixes its own review findings.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+AGENTS = REPO / ".agents" / "agents"
+JOBS = REPO / "factory" / "jobs"
+CONFIG = json.loads((REPO / "factory" / "config.json").read_text())
+
+
+def fail(msg):
+    print(f"agent: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def definition(name):
+    """(frontmatter dict, instructions) from .agents/agents/<name>/AGENT.md."""
+    path = AGENTS / name / "AGENT.md"
+    if not path.exists():
+        fail(f"no agent {name} ({path} is missing)")
+    m = re.match(r"---\n(.*?)\n---\n(.*)", path.read_text(), re.S)
+    if not m:
+        fail(f"{path} has no frontmatter")
+    meta = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(":")
+        meta[key.strip()] = value.strip()
+    for key in ("cli", "model", "effort"):
+        if not meta.get(key):
+            fail(f"{path} frontmatter is missing `{key}`")
+    return meta, m.group(2).strip()
+
+
+def find_job(arg):
+    if arg.isdigit():
+        for path in JOBS.glob("*/job.json"):
+            job = json.loads(path.read_text())
+            if job["issue"] == int(arg):
+                return job
+        fail(f"no job for issue #{arg}")
+    path = JOBS / arg / "job.json"
+    if not path.exists():
+        fail(f"no job {arg}")
+    return json.loads(path.read_text())
+
+
+def port(job, name):
+    offset = CONFIG["ports"]["offsets"].get(name)
+    if offset is None:
+        return None
+    n = int(job["id"][:3])
+    return CONFIG["ports"]["base"] + CONFIG["ports"]["step"] * n + offset
+
+
+def prompt(job, name, note):
+    """The job header every agent starts from. `Job folder:` ties logs to the job."""
+    parts = [
+        f"Job: {job['id']}.",
+        f"Job folder: {JOBS / job['id']}/.",
+        f"Main checkout: {REPO}.",
+        f"Worktree: {job['worktree']}.",
+        f"Branch: {job['branch']}.",
+        f"Base: origin/{CONFIG['base_branch']}.",
+        f"Issue: #{job['issue']}.",
+    ]
+    if job["round"]:
+        parts.append(f"Round: {job['round']}.")
+    if job["pr"]:
+        parts.append(f"PR: #{job['pr']}.")
+    if (p := port(job, name)) is not None:
+        parts.append(f"Port: {p}.")
+    return " ".join(parts) + (f"\n\n{note.strip()}" if note and note.strip() else "")
+
+
+def claude_cmd(meta, instructions, text, session):
+    cmd = ["claude", "-p", text,
+           "--model", meta["model"], "--effort", meta["effort"],
+           "--append-system-prompt", instructions,
+           "--dangerously-skip-permissions", "--output-format", "json"]
+    if meta.get("tools"):
+        cmd += ["--tools", *[t.strip() for t in meta["tools"].split(",")]]
+    if session:
+        cmd += ["--resume", session]
+    return cmd
+
+
+def codex_cmd(meta, last_message):
+    return ["codex", "exec", "-m", meta["model"],
+            "-c", f'model_reasoning_effort="{meta["effort"]}"',
+            "-s", "workspace-write", "-C", str(REPO),
+            "-o", str(last_message), "-"]
+
+
+def run(job, name, note=""):
+    """Run one agent to completion. Returns its one-line reply."""
+    meta, instructions = definition(name)
+    folder = JOBS / job["id"]
+    logs = folder / "logs"
+    logs.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log = logs / f"{name}-r{job['round']}-{stamp}.log"
+    text = prompt(job, name, note)
+    # A factory run usually starts inside a Claude Code session; nested `claude`
+    # refuses to start while this is set.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+    if meta["cli"] == "claude":
+        session_file = folder / ".sessions" / name
+        session = session_file.read_text().strip() if name == "builder" and session_file.exists() else None
+        res = subprocess.run(claude_cmd(meta, instructions, text, session),
+                             cwd=REPO, env=env, capture_output=True, text=True)
+        log.write_text(f"$ {name} ({meta['cli']} {meta['model']} {meta['effort']})\n\n{text}\n\n"
+                       f"--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}")
+        try:
+            out = json.loads(res.stdout)
+        except json.JSONDecodeError:
+            fail(f"{name} exited {res.returncode} without a result; see {log}")
+        if name == "builder" and out.get("session_id"):
+            session_file.parent.mkdir(exist_ok=True)
+            session_file.write_text(out["session_id"])
+        if res.returncode != 0 or out.get("is_error"):
+            fail(f"{name} failed: {str(out.get('result', ''))[:200]}; see {log}")
+        reply = str(out.get("result", ""))
+
+    elif meta["cli"] == "codex":
+        last = logs / f".{name}-{stamp}.last"
+        res = subprocess.run(codex_cmd(meta, last), input=f"{instructions}\n\n---\n\n{text}",
+                             cwd=REPO, env=env, capture_output=True, text=True)
+        log.write_text(f"$ {name} ({meta['cli']} {meta['model']} {meta['effort']})\n\n{text}\n\n"
+                       f"--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}")
+        if res.returncode != 0 or not last.exists():
+            fail(f"{name} exited {res.returncode}; see {log}")
+        reply = last.read_text()
+        last.unlink()
+
+    else:
+        fail(f"{name}: unknown cli {meta['cli']!r} (use claude or codex)")
+
+    lines = [l for l in reply.strip().splitlines() if l.strip()]
+    return lines[-1] if lines else "(no reply)"
+
+
+def run_reviewers(job):
+    """Every routed reviewer whose file is missing this round, at the same time."""
+    todo = [r for r in job["reviewers"] if not (JOBS / job["id"] / f"round-{job['round']}" / f"{r}.md").exists()]
+    if not todo:
+        print("every reviewer already wrote its file this round")
+        return
+
+    def one(name):
+        try:
+            return name, run(job, name, f"Review round {job['round']}.")
+        except SystemExit:
+            return name, "FAILED (see the log in the job folder)"
+
+    with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        for name, reply in pool.map(one, todo):
+            print(f"{name}: {reply}")
+    subprocess.run([str(REPO / "factory" / "bin" / "job"), "sync", job["id"]], check=False)
+
+
+def main(argv):
+    if len(argv) < 2 or argv[0] in {"-h", "--help"}:
+        print(__doc__.strip())
+        sys.exit(0 if argv and argv[0] in {"-h", "--help"} else 1)
+    job = find_job(argv[0])
+    if argv[1] == "reviewers":
+        run_reviewers(job)
+    else:
+        print(f"{argv[1]}: {run(job, argv[1], ' '.join(argv[2:]))}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
