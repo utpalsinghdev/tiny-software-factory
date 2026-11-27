@@ -16,6 +16,7 @@ user. Never work around it.
 /factory run              drain the queue: every open `factory` issue, `concurrency` at a time; also resumes
 /factory #<issue-id>      run one issue now
 /factory ask <anything>   talk to the factory: status, feedback, rejections, new features
+/factory dashboard        open a live, read-only HTML dashboard of every job
 ```
 
 ## The line
@@ -208,6 +209,16 @@ they mean, or whether it's feedback or a new feature, ask.
   ```bash
   gh issue create --label factory --title "<short imperative title>" --body "<the feature, verbatim>"
   ```
+
+## Dashboard
+
+To watch the factory while it runs, start the dashboard in the background so it does not block this session (`--watch` loops forever):
+
+```bash
+factory/bin/dashboard --watch --open >/dev/null 2>&1 &
+```
+
+It is read-only: it reads `factory/jobs/` and runs `gh pr checks` for each open PR, and never writes under `factory/jobs/`. It writes `factory/dashboard.html` (gitignored), refreshes every 5 seconds with `--watch`, and `--open` opens it in the browser once.
 
 ## Guardrails
 

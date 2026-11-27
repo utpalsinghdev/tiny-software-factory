@@ -91,6 +91,7 @@ factory/
   config.json                      concurrency, rounds, labels, reviewers, ports
   bin/job                          the only writer of job.json; refuses illegal moves; merges
   bin/agent                        runs an agent on its own CLI and model
+  bin/dashboard                    read-only HTML dashboard; reads factory/jobs and gh pr checks
 INSTALL.md                         instructions for the installing agent
 ```
 
@@ -111,6 +112,16 @@ INSTALL.md                         instructions for the installing agent
   protection and required checks still apply. The factory never deploys.
 - **The label is the trust boundary.** Only issues labeled `factory` run, and
   issue text reaches agents only as quoted data.
+
+## Watch the factory
+
+While a run is in progress you can watch all jobs in a browser:
+
+```bash
+factory/bin/dashboard --watch --open
+```
+
+This writes `factory/dashboard.html` (gitignored), opens it once, and refreshes every 5 seconds. It shows counts, the stage timeline for each job, review verdicts, and CI check results. Flags: `--out PATH` to change the output file, `--watch N` to change the interval, `--no-gh` to skip the `gh` calls when you are offline. The script is read-only and never writes under `factory/jobs`.
 
 ## Safety
 

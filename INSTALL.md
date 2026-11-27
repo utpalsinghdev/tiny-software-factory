@@ -41,6 +41,7 @@ Copy these to the same paths in the project, unchanged:
 factory/config.json
 factory/bin/job
 factory/bin/agent
+factory/bin/dashboard
 ```
 
 ```bash
@@ -48,7 +49,7 @@ SRC=https://raw.githubusercontent.com/utpalsinghdev/tiny-software-factory/main
 for f in <the paths above>; do
   mkdir -p "$(dirname "$f")" && curl -fsSL "$SRC/$f" -o "$f"
 done
-chmod +x factory/bin/job factory/bin/agent
+chmod +x factory/bin/job factory/bin/agent factory/bin/dashboard
 ```
 
 The real skill is `.agents/skills/factory/SKILL.md`. Codex and Pi read
