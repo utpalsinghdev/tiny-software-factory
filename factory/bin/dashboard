@@ -2,7 +2,7 @@
 """Read-only HTML dashboard for the tiny software factory.
 
 Reads the job folders that factory/bin/job writes under factory/jobs, asks
-`gh pr checks` for each open PR, and writes one self-contained HTML page
+`gh pr checks` for linked PRs, and writes one self-contained HTML page
 (no JavaScript). It never writes under factory/jobs.
 
 Usage:
@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
 from datetime import datetime, timezone
@@ -282,8 +283,14 @@ def pr_checks(pr: int | None, run=subprocess.run) -> dict | None:
     cmd = ["gh", "pr", "checks", str(pr), "--json", "name,bucket,link"]
     try:
         result = run(cmd, capture_output=True, text=True, timeout=20, cwd=REPO)
-        # A PR with no checks: gh exits 1 with empty stdout
-        data = json.loads(result.stdout) if (result.stdout or "").strip() else []
+        if result.stdout.strip():
+            data = json.loads(result.stdout)
+        elif result.returncode == 1 and re.fullmatch(
+            r"no checks reported on the '.+' branch", result.stderr.strip()
+        ):
+            data = []
+        else:
+            return dict(_ERROR_DICT)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired,
             json.JSONDecodeError):
         return dict(_ERROR_DICT)
@@ -602,9 +609,9 @@ def _render_card(v: dict, now: str, E, all_reviewers) -> str:
     status = []
     if current_round or required:
         reviews = (current_round or {}).get("reviews") or {}
-        passed = sum(1 for rv in reviews.values() if rv == "PASS")
+        reviews_passed = sum(1 for rv in reviews.values() if rv == "PASS")
         status.append(f'<div class="reviews"><h4>Reviews <span class="num">'
-                      f'{passed} of {len(required)} passed</span></h4>')
+                      f'{reviews_passed} of {len(required)} passed</span></h4>')
         if required:
             status.append("<ul>")
             for reviewer in required:
@@ -618,28 +625,32 @@ def _render_card(v: dict, now: str, E, all_reviewers) -> str:
         not_req = [r for r in all_reviewers if r not in required]
         if not_req:
             status.append('<p class="quiet">Not required: ' + ", ".join(E(r) for r in not_req) + "</p>")
-        prev_rounds = [r for r in rounds if not r.get("current")]
-        if prev_rounds:
-            status.append("<details><summary>Earlier rounds</summary><ul>")
-            for pr_round in prev_rounds:
+        previous = []
+        for prior in rounds:
+            if not prior.get("current"):
                 items = ", ".join(f"{E(n)} {_VERDICT.get(rv, (E(rv),))[0]}"
-                                  for n, rv in (pr_round.get("reviews") or {}).items())
-                status.append(f'<li><span class="num">Round {pr_round["n"]}</span><span>{items}</span></li>')
+                                  for n, rv in (prior.get("reviews") or {}).items())
+                previous.append(f'Round {E(str(prior["n"]))}: {items}')
+        if previous and v.get("stage") in {"build", "review"}:
+            status.append(f'<p class="quiet">Previous review, {previous.pop()}</p>')
+        if previous:
+            status.append("<details><summary>Earlier rounds</summary><ul>")
+            status.extend(f"<li>{item}</li>" for item in previous)
             status.append("</ul></details>")
         status.append("</div>")
 
     checks_data = v.get("checks")
     if "checks" not in v and v.get("pr"):
-        why = "Checks not fetched" if v.get("stage") in DONE else "Checks not fetched (--no-gh)"
-        status.append(f'<div class="checks checks-na"><h4>{why}</h4></div>')
+        status.append('<div class="checks checks-na"><h4>Checks not fetched (--no-gh)</h4></div>')
     elif checks_data is None:
         status.append('<div class="checks checks-na"><h4>No PR yet</h4></div>')
     elif not checks_data.get("ok"):
         status.append('<div class="checks checks-na"><h4>Checks unavailable</h4></div>')
     else:
-        passed = checks_data.get("passed", 0)
+        checks_passed = checks_data.get("passed", 0)
         total = checks_data.get("total", 0)
         check_items = checks_data.get("checks") or []
+        skipped = sum(c.get("bucket") == "skipping" for c in check_items)
         if any(c.get("bucket") in ("fail", "cancel") for c in check_items):
             summary_cls = "checks-fail"
         elif any(c.get("bucket") == "pending" for c in check_items):
@@ -649,8 +660,11 @@ def _render_card(v: dict, now: str, E, all_reviewers) -> str:
         if not check_items:
             status.append('<div class="checks checks-na"><h4>No checks</h4>')
         else:
+            count = f"{checks_passed} of {total} passed" if total else "None counted"
+            if skipped:
+                count += f", {skipped} skipped"
             status.append(f'<div class="checks {summary_cls}"><h4>Checks <span class="num">'
-                          f'{passed} of {total} passed</span></h4>')
+                          f'{count}</span></h4>')
         if check_items:
             status.append("<ul>")
             for c in check_items:
@@ -727,11 +741,15 @@ def main(argv):
     if args.watch is not None and args.watch < 1:
         parser.error("--watch SECS must be >= 1")
 
-    out: Path = args.out if args.out is not None else DEFAULT_OUT
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp")
+    out = args.out if args.out is not None else DEFAULT_OUT
+    destination = out.parent.resolve() / out.name
+    jobs_dir = JOBS.resolve()
+    if destination.is_relative_to(jobs_dir) or out.resolve().is_relative_to(jobs_dir):
+        parser.error("--out must not point inside factory/jobs")
+    destination.parent.mkdir(parents=True, exist_ok=True)
 
     all_reviewers = _load_reviewers(CONFIG_PATH)
+    finished_checks = {}
 
     def _write_once():
         views = read_jobs(JOBS)
@@ -739,14 +757,28 @@ def main(argv):
         for v in views:
             if v.get("error"):
                 continue
-            if not v.get("pr"):
+            pr = v.get("pr")
+            if not pr:
                 v["checks"] = None
-            elif not args.no_gh and v.get("stage") not in DONE:
-                v["checks"] = pr_checks(v.get("pr"))
-            # else: leave "checks" unset (not fetched)
+            elif not args.no_gh:
+                if v.get("stage") in DONE:
+                    expires, result = finished_checks.get(pr, (0, None))
+                    if time.monotonic() >= expires:
+                        result = pr_checks(pr)
+                        finished_checks[pr] = (time.monotonic() + 60, result)
+                    v["checks"] = result
+                else:
+                    v["checks"] = pr_checks(pr)
         html = render(views, now, args.watch, all_reviewers)
-        tmp.write_text(html, encoding="utf-8")
-        tmp.replace(out)
+        with tempfile.NamedTemporaryFile(dir=destination.parent, encoding="utf-8",
+                                         mode="w", delete=False) as handle:
+            tmp = Path(handle.name)
+            try:
+                handle.write(html)
+                handle.close()
+                tmp.replace(destination)
+            finally:
+                tmp.unlink(missing_ok=True)
 
     _write_once()
     print(out)

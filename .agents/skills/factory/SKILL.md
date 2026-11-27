@@ -218,7 +218,10 @@ To watch the factory while it runs, start the dashboard in the background so it 
 factory/bin/dashboard --watch --open >/dev/null 2>&1 &
 ```
 
-It is read-only: it reads `factory/jobs/` and runs `gh pr checks` for each open PR, and never writes under `factory/jobs/`. It writes `factory/dashboard.html` (gitignored), refreshes every 5 seconds with `--watch`, and `--open` opens it in the browser once.
+It reads `factory/jobs/` and runs `gh pr checks` for linked PRs without writing
+under `factory/jobs/`. It writes `factory/dashboard.html` (gitignored), refreshes
+it every 5 seconds with `--watch`, and opens it in the browser once with `--open`.
+Checks for finished jobs are refreshed at most once per minute.
 
 ## Guardrails
 

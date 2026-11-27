@@ -235,12 +235,12 @@ class TestReadJob(unittest.TestCase):
 class TestPrChecks(unittest.TestCase):
     """Tests for pr_checks()."""
 
-    def _run(self, stdout, returncode=0):
+    def _run(self, stdout, returncode=0, stderr=""):
         """Return a fake subprocess.run that returns a SimpleNamespace."""
         from types import SimpleNamespace
 
         def fake_run(cmd, **kwargs):
-            return SimpleNamespace(stdout=stdout, returncode=returncode)
+            return SimpleNamespace(stdout=stdout, returncode=returncode, stderr=stderr)
 
         return fake_run
 
@@ -271,12 +271,21 @@ class TestPrChecks(unittest.TestCase):
         assert seen["cwd"] == dash.REPO
 
     def test_empty_list_means_no_checks(self):
-        for out in ("[]", ""):
-            result = dash.pr_checks(42, run=self._run(out, returncode=1))
+        for run in (self._run("[]"), self._run("", 1, "no checks reported on the 'main' branch\n")):
+            result = dash.pr_checks(42, run=run)
             assert result["ok"] is True and result["checks"] == []
         html = dash.render([TestRender._view(None, pr=42, checks=result)], "2024-01-01T12:00:00Z", None)
         self.assertIn("No checks", html)
         self.assertNotIn("Checks unavailable", html)
+
+    def test_failed_request_is_not_an_empty_check_list(self):
+        result = dash.pr_checks(42, run=self._run("", 1, "HTTP 503: Service unavailable"))
+        self.assertFalse(result["ok"])
+
+    def test_pending_checks_from_exit_code_8(self):
+        result = dash.pr_checks(42, run=self._run('[{"name":"test","bucket":"pending"}]', 8))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["checks"][0]["bucket"], "pending")
 
     def test_non_dict_items_skipped(self):
         payload = json.dumps(["junk", 3, {"name": "lint", "bucket": "pass", "link": ""}])
@@ -378,6 +387,23 @@ class TestRender(unittest.TestCase):
         self.assertIn("check-pass", html)
         self.assertIn("check-fail", html)
         self.assertIn("check-pending", html)
+
+    def test_check_summary_explains_skipped_checks(self):
+        checks = dash.pr_checks(42, run=TestPrChecks()._run(
+            '[{"bucket":"pass"},{"bucket":"skipping"}]'
+        ))
+        html = dash.render([self._view(checks=checks)], self.NOW, None)
+        self.assertIn("1 of 1 passed, 1 skipped", html)
+
+    def test_latest_previous_round_is_visible_during_retry(self):
+        rounds = [
+            {"n": 1, "reviews": {"alice": "CHANGES"}, "current": False},
+            {"n": 2, "reviews": {"bob": "CHANGES"}, "current": False},
+        ]
+        view = self._view(required=["alice", "bob"], round=3, rounds=rounds, stage="build")
+        html = dash.render([view], self.NOW, None)
+        self.assertIn("Round 2: bob Changes", html.split("<details>", 1)[0])
+        self.assertIn("alice Changes", html.split("<details>", 1)[1])
 
     def test_checks_summary_amber_when_pending_no_fail(self):
         checks = {
@@ -544,10 +570,42 @@ class TestMain(unittest.TestCase):
         after = snapshot(self.jobs_dir)
         self.assertEqual(before, after)
 
-    def test_atomic_write_via_tmp(self):
-        """Output is written atomically: no .tmp file left behind."""
+    def test_atomic_write_does_not_follow_a_preexisting_tmp_symlink(self):
+        state = next(self.jobs_dir.glob("*/job.json"))
+        original = state.read_bytes()
+        self.out.parent.mkdir()
+        link = self.out.with_suffix(".tmp")
+        link.symlink_to(state)
         self._run_main()
-        self.assertFalse(self.out.with_suffix(".tmp").exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(state.read_bytes(), original)
+        self.assertEqual(set(self.out.parent.iterdir()), {self.out, link})
+
+    def test_rejects_output_inside_job_state_before_writing(self):
+        state = next(self.jobs_dir.glob("*/job.json"))
+        original = state.read_bytes()
+        alias = self.root / "alias"
+        alias.symlink_to(self.jobs_dir, target_is_directory=True)
+        for out in (self.jobs_dir / "new" / "report.html", alias / state.relative_to(self.jobs_dir)):
+            with self.subTest(out=out), unittest.mock.patch.object(dash, "JOBS", self.jobs_dir), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                dash.main(["--out", str(out), "--no-gh"])
+        self.assertEqual(state.read_bytes(), original)
+        self.assertFalse((self.jobs_dir / "new").exists())
+
+    def test_finished_pr_checks_refresh_after_one_minute(self):
+        finished = TestRender._view(None, stage="merged", pr=42)
+        pending = {"ok": True, "passed": 0, "total": 1,
+                   "checks": [{"name": "test", "bucket": "pending"}]}
+        settled = {**pending, "passed": 1, "checks": [{"name": "test", "bucket": "pass"}]}
+        with unittest.mock.patch.object(dash, "read_jobs", return_value=[finished]), \
+             unittest.mock.patch.object(dash, "pr_checks", side_effect=[pending, settled]) as fetch, \
+             unittest.mock.patch("time.monotonic", side_effect=[10, 10, 15, 70, 70]), \
+             unittest.mock.patch("time.sleep", side_effect=[None, None, KeyboardInterrupt]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            dash.main(["--out", str(self.out), "--watch"])
+        self.assertEqual(fetch.call_args_list, [unittest.mock.call(42)] * 2)
+        self.assertIn("1 of 1 passed", self.out.read_text())
 
     def test_refresh_meta_with_watch_arg(self):
         """--watch N sets the refresh meta tag in the HTML."""

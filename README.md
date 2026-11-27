@@ -121,7 +121,13 @@ While a run is in progress you can watch all jobs in a browser:
 factory/bin/dashboard --watch --open
 ```
 
-This writes `factory/dashboard.html` (gitignored), opens it once, and refreshes every 5 seconds. It shows counts, the stage timeline for each job, review verdicts, and CI check results. Flags: `--out PATH` to change the output file, `--watch N` to change the interval, `--no-gh` to skip the `gh` calls when you are offline. The script is read-only and never writes under `factory/jobs`.
+This writes `factory/dashboard.html` (gitignored), opens it once, and refreshes
+every 5 seconds. It shows job counts, stage timelines, review verdicts, and CI
+checks. Checks for finished jobs refresh at most once per minute.
+
+Use `--out PATH` to change the output file, `--watch N` to change the refresh
+interval, or `--no-gh` to skip GitHub checks. The script never writes under
+`factory/jobs/`.
 
 ## Safety
 
