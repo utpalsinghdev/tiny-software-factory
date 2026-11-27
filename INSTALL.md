@@ -41,6 +41,7 @@ Copy these to the same paths in the project, unchanged:
 factory/config.json
 factory/bin/job
 factory/bin/agent
+factory/bin/dashboard
 ```
 
 ```bash
@@ -48,7 +49,7 @@ SRC=https://raw.githubusercontent.com/utpalsinghdev/tiny-software-factory/main
 for f in <the paths above>; do
   mkdir -p "$(dirname "$f")" && curl -fsSL "$SRC/$f" -o "$f"
 done
-chmod +x factory/bin/job factory/bin/agent
+chmod +x factory/bin/job factory/bin/agent factory/bin/dashboard
 ```
 
 The real skill is `.agents/skills/factory/SKILL.md`. Codex and Pi read
@@ -130,10 +131,11 @@ gh label create factory:needs-human --color D93F0B --description "The factory ne
 1. The validation commands in AGENTS.md pass on the current branch. If they
    don't, the builder can never reach READY: tell the user what's broken.
 2. `factory/bin/job queue` runs without an error.
-3. `factory/bin/agent --help` prints its usage, and every `AGENT.md` has
-   `cli`, `model` and `effort` in its frontmatter.
+3. `factory/bin/agent --help` and `factory/bin/dashboard --help` print their
+   usage, and every `AGENT.md` has `cli`, `model` and `effort` in its frontmatter.
 4. `python3 -m json.tool factory/config.json` succeeds.
-5. `git check-ignore factory/jobs/x .worktrees/x` prints both paths, and
+5. `git check-ignore factory/jobs/x .worktrees/x factory/dashboard.html` prints
+   all three paths, and
    `git status --porcelain --untracked-files=all` lists every file from step 1
    as committable.
 

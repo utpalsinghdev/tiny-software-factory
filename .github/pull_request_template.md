@@ -27,6 +27,7 @@
 - [ ] Agents (`.agents/agents/<agent>/AGENT.md`)
 - [ ] Job state and moves (`factory/bin/job`)
 - [ ] Agent runner (`factory/bin/agent`)
+- [ ] Dashboard (`factory/bin/dashboard`)
 - [ ] Config (`factory/config.json`)
 - [ ] Install and docs (`INSTALL.md`, `README.md`)
 
